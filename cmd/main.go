@@ -46,6 +46,18 @@ func main() {
 		}
 	}
 
+	// Fill no commit days
+	now := time.Now().Unix()
+	today := now - (now % 86400) // To midnight ts
+	for i := 0; i < 375; i++ {
+		ds := time.Unix(today, 0).Format("2006-01-02")
+		log.Printf("date: %s\n", ds)
+		if _, ok := contribs[ds]; !ok {
+			contribs[ds] = 0
+		}
+		today -= 86400
+	}
+
 	b, _ = json.Marshal(contribs)
 	fmt.Printf("\n\n\nContributions: \n%s", string(b))
 }
