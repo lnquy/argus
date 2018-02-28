@@ -1,6 +1,8 @@
 package gitlab
 
-import argus "github.com/lnquy/argus/lib"
+import (
+	argus "github.com/lnquy/argus/lib"
+)
 
 type crawler struct {
 	svc *argus.SVC
@@ -12,8 +14,8 @@ func NewCrawler(svc *argus.SVC) argus.Crawler {
 	}
 }
 
-func (c *crawler) GetContributions() []*argus.Day {
+func (c *crawler) GetContributions() ([]argus.Repo, error) {
 	// TODO
-	return nil
+	return nil, nil
 }
 
