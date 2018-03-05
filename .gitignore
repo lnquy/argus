@@ -16,4 +16,4 @@
 .idea/
 .vscode/
 
-cmd/argus.log
+cmd/argus/*.log

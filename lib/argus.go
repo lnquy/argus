@@ -5,7 +5,7 @@ import "time"
 type (
 	SVC struct {
 		User   string   `json:"username"`
-		Email  []string `json:"emails"`
+		Emails  []string `json:"emails"`
 		APIKey string   `json:"api_key"`
 	}
 
