@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	argus "github.com/lnquy/argus/lib"
@@ -20,6 +21,7 @@ const (
 
 var (
 	reposMap map[int]*argus.Repo
+	reposMux sync.RWMutex
 )
 
 type crawler struct {
@@ -34,12 +36,18 @@ func NewCrawler(svc *argus.SVC) argus.Crawler {
 
 func (c *crawler) GetContributions() ([]argus.Repo, error) {
 	reposMap = make(map[int]*argus.Repo)
+	reposMux = sync.RWMutex{}
 	events, err := c.listEvents()
 	if err != nil {
 		return nil, err
 	}
 
+	prjChan := make(chan int, 1000)
+	wg := sync.WaitGroup{}
+	c.getRepo(prjChan, &wg) // Run workers to crawl project details in background
+
 	for _, e := range events {
+		reposMux.Lock()
 		if r, ok := reposMap[e.ProjectID]; ok { // If project details has been crawled then just append commit
 			r.Commits = append(r.Commits, argus.Commit{
 				Sha:  e.PushData.CommitTo,
@@ -52,10 +60,8 @@ func (c *crawler) GetContributions() ([]argus.Repo, error) {
 				},
 			})
 		} else { // Otherwise update repo details and its commits
-			tr, err := c.getRepo(e.ProjectID)
-			if err != nil {
-				tr.Name = fmt.Sprintf("%d", e.ProjectID)
-			}
+			prjChan <- e.ProjectID // Project details will be updated asynchronously
+			tr := argus.Repo{}
 			tr.Commits = append(tr.Commits, argus.Commit{
 				Sha:  e.PushData.CommitTo,
 				Date: e.CreatedAt,
@@ -66,9 +72,12 @@ func (c *crawler) GetContributions() ([]argus.Repo, error) {
 					Email: "",
 				},
 			})
-			reposMap[e.ProjectID] = tr
+			reposMap[e.ProjectID] = &tr
 		}
+		reposMux.Unlock()
 	}
+	close(prjChan)
+	wg.Wait()
 
 	repos := make([]argus.Repo, 0)
 	for _, r := range reposMap {
@@ -77,66 +86,116 @@ func (c *crawler) GetContributions() ([]argus.Repo, error) {
 	return repos, nil
 }
 
+// Let 10 workers crawls event pages in parallel.
+// Check at last page (page % 10 == 0), if there's no events then stop all workers and return result.
+// Otherwise, continue crawling from (page+1) to (page+10)
 func (c *crawler) listEvents() ([]Event, error) {
 	events := make([]Event, 0)
 	lastYear := time.Now().AddDate(-1, 0, 0)
-
-	page := 0
-	for {
-		page++
-		log.Printf("gitlab: crawling event page #%d\n", page)
-		req := fmt.Sprintf("%s/events?per_page=100&page=%d&after=%s&private_token=%s",
-			GITLAB, page, lastYear.Format("2006-01-02"), c.svc.APIKey)
-		resp, err := http.Get(req)
-		if err != nil {
-			log.Printf("gitlab: failed to fetch event page %s: %s\n", req, err)
-			return nil, err
-		}
-		tmpEvents := make([]Event, 0)
-		if err = json.NewDecoder(resp.Body).Decode(&tmpEvents); err != nil {
-			resp.Body.Close()
-			log.Printf("github: failed to decode commits for %s: %s\n", req, err)
-			return nil, err
-		}
-		resp.Body.Close()
-
-		for _, e := range tmpEvents {
-			if strings.HasPrefix(e.ActionName, actPushed) ||
-				strings.HasPrefix(e.ActionName, actPushed) ||
-				strings.HasPrefix(e.ActionName, actMerged) {
-				events = append(events, e)
-			}
-		}
-		if len(tmpEvents) == 0 || lastYear.Unix() >= tmpEvents[len(tmpEvents)-1].CreatedAt.Unix() {
-			break
-		}
+	pageChan := make(chan int, 20)
+	eventChan := make(chan Event, 1000)
+	for i := 1; i <= 10; i++ {
+		pageChan <- i
 	}
 
-	log.Printf("gitlab: done events crawling\n")
+	wg := sync.WaitGroup{}
+	for r := 0; r < 10; r++ { // Workers
+		wg.Add(1)
+		go func(wg *sync.WaitGroup) {
+			for p := range pageChan {
+				log.Printf("gitlab: crawling event page #%d\n", p)
+				req := fmt.Sprintf("%s/events?per_page=100&page=%d&after=%s&private_token=%s",
+					GITLAB, p, lastYear.Format("2006-01-02"), c.svc.APIKey)
+				resp, err := http.Get(req)
+				if err != nil {
+					log.Printf("gitlab: failed to fetch event page %s: %s\n", req, err)
+					continue
+				}
+				tmpEvents := make([]Event, 0)
+				if err = json.NewDecoder(resp.Body).Decode(&tmpEvents); err != nil {
+					resp.Body.Close()
+					log.Printf("github: failed to decode commits for %s: %s\n", req, err)
+					continue
+				}
+				resp.Body.Close()
+
+				for _, e := range tmpEvents { // Report crawled events
+					if strings.HasPrefix(e.ActionName, actPushed) ||
+						strings.HasPrefix(e.ActionName, actCreated) ||
+						strings.HasPrefix(e.ActionName, actMerged) {
+						eventChan <- e
+					}
+				}
+				log.Printf("gitlab: done crawling event page #%d\n", p)
+
+				// Check at every 10th page.
+				// If no events available then close the page channel and end worker.
+				// Otherwise, distribute new jobs (page+1 -> page+10) to the page channel.
+				if p%10 == 0 {
+					if len(tmpEvents) == 0 || lastYear.Unix() >= tmpEvents[len(tmpEvents)-1].CreatedAt.Unix() {
+						if pageChan != nil {
+							close(pageChan)
+						}
+					} else {
+						for i := p + 1; i <= p+10; i++ {
+							pageChan <- i
+						}
+					}
+				}
+			}
+			wg.Done()
+		}(&wg)
+	}
+
+	// Put all crawled events to the array
+	go func() {
+		for e := range eventChan {
+			events = append(events, e)
+		}
+	}()
+	wg.Wait() // Wait for all workers returns
+	close(eventChan)
+	// Sleep a little bit so all events in eventChan can be consumed before returning
+	time.Sleep(500 * time.Millisecond)
+
 	return events, nil
 }
 
-func (c *crawler) getRepo(pid int) (*argus.Repo, error) {
-	log.Printf("gitlab: get repo detail: %d\n", pid)
-	resp, err := http.Get(fmt.Sprintf("%s/projects/%d?private_token=%s", GITLAB, pid, c.svc.APIKey))
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+func (c *crawler) getRepo(pidChan chan int, wg *sync.WaitGroup) {
+	for w := 0; w < 10; w++ {
+		wg.Add(1)
+		go func() {
+			for pid := range pidChan {
+				log.Printf("gitlab: get repo detail: %d\n", pid)
+				resp, err := http.Get(fmt.Sprintf("%s/projects/%d?private_token=%s", GITLAB, pid, c.svc.APIKey))
+				if err != nil {
+					continue
+				}
 
-	localRepo := LocalRepo{}
-	if err = json.NewDecoder(resp.Body).Decode(&localRepo); err != nil {
-		return nil, err
+				lr := LocalRepo{}
+				if err = json.NewDecoder(resp.Body).Decode(&lr); err != nil {
+					resp.Body.Close()
+					continue
+				}
+				resp.Body.Close()
+
+				reposMux.Lock()
+				r := reposMap[pid]
+				reposMap[pid] = &argus.Repo{
+					Name:      lr.Name,
+					FullName:  lr.NameWithNamespace,
+					URL:       lr.WebURL,
+					Private:   !lr.Public,
+					CreatedAt: lr.CreatedAt,
+					PushedAt:  lr.LastActivityAt,
+					Commits:   r.Commits,
+				}
+				reposMux.Unlock()
+				log.Printf("gitlab: done get repo detail: %d\n", pid)
+			}
+			wg.Done()
+		}()
 	}
-	log.Printf("gitlab: done get repo detail: %d\n", pid)
-	return &argus.Repo{
-		Name:      localRepo.Name,
-		FullName:  localRepo.NameWithNamespace,
-		URL:       localRepo.WebURL,
-		Private:   !localRepo.Public,
-		CreatedAt: localRepo.CreatedAt,
-		PushedAt:  localRepo.LastActivityAt,
-	}, nil
 }
 
 type Event struct {
