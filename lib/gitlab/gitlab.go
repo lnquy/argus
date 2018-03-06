@@ -181,6 +181,7 @@ func (c *crawler) getRepo(pidChan chan int, wg *sync.WaitGroup) {
 
 				reposMux.Lock()
 				r := reposMap[pid]
+				delete(reposMap, pid) // TODO
 				reposMap[pid] = &argus.Repo{
 					Name:      lr.Name,
 					FullName:  lr.NameWithNamespace,

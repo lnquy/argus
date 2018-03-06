@@ -3,11 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
+	"sync"
 	"time"
 
-	"github.com/labstack/gommon/log"
 	argus "github.com/lnquy/argus/lib"
-	//"github.com/lnquy/argus/lib/github"
+	"github.com/lnquy/argus/lib/github"
 	"github.com/lnquy/argus/lib/gitlab"
 )
 
@@ -21,25 +22,56 @@ var (
 )
 
 func main() {
-	//c := github.NewCrawler(&argus.SVC{
-	//	User:   "lnquy",
-	//	Emails:  []string{"lnquy.it@gmail.com"},
-	//	APIKey: "",
-	//})
-
-	c := gitlab.NewCrawler(&argus.SVC{
+	c := make([]argus.Crawler, 0)
+	c = append(c, github.NewCrawler(&argus.SVC{
 		User:   "lnquy",
 		Emails:  []string{"lnquy.it@gmail.com"},
 		APIKey: "",
-	})
+	}))
+	c = append(c, gitlab.NewCrawler(&argus.SVC{
+		User:   "lnquy",
+		Emails:  []string{"lnquy.it@gmail.com"},
+		APIKey: "",
+	}))
 
-	repos, err := c.GetContributions()
-	if err != nil {
-		log.Errorf("main: failed to fetch Github contributions: %s\n", err)
-		return
+	wg := sync.WaitGroup{}
+	repos := make([]argus.Repo, 0)
+	reposChan := make(chan []argus.Repo, 10)
+	for i := range c {
+		wg.Add(1)
+		go func(i int) {
+			log.Printf("main: fetching contribution #%d\n", i)
+			defer wg.Done()
+			r, err := c[i].GetContributions()
+			if err != nil {
+				log.Printf("main: failed to fetch contribution: %s\n", err)
+				return
+			}
+			reposChan <-r
+		}(i)
 	}
+
+	go func() {
+		for rs := range reposChan {
+			for _, r := range rs { // TODO
+				if r.Name == "" && r.FullName == "" && r.URL == "" {
+					continue
+				}
+				repos = append(repos, r)
+			}
+		}
+	}()
+	wg.Wait()
+	close(reposChan)
+	time.Sleep(500*time.Millisecond)
+
 	b, _ := json.Marshal(repos)
 	fmt.Printf("Raw repos: \n%s", string(b))
+
+	fmt.Printf("\n\nContributions by repo:\n")
+	for _, r := range repos {
+		fmt.Printf("%s (%s) - %d\n", r.Name, r.URL, len(r.Commits))
+	}
 
 	contribs = make(map[string]int)
 	for _, r := range repos {
@@ -52,17 +84,6 @@ func main() {
 			}
 		}
 	}
-
-	// Fill no commit days
-	//now := time.Now().Unix()
-	//today := now - (now % 86400) // To midnight ts
-	//for i := 0; i < 375; i++ {
-	//	ds := time.Unix(today, 0).Format("2006-01-02")
-	//	if _, ok := contribs[ds]; !ok {
-	//		contribs[ds] = 0
-	//	}
-	//	today -= 86400
-	//}
 
 	b, _ = json.Marshal(contribs)
 	fmt.Printf("\n\n\nContributions: \n%s", string(b))
