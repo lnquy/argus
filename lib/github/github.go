@@ -11,7 +11,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const GITHUB = "https://api.github.com"
+const githubAPI = "https://api.github.com"
 
 type crawler struct {
 	svc *argus.SVC
@@ -41,7 +41,7 @@ func (c *crawler) listRepos() ([]argus.Repo, error) {
 	log.Debug("fetch all repos")
 	repos := make([]argus.Repo, 0)
 
-	resp, err := http.Get(fmt.Sprintf("%s/user/repos?sort=pushed&per_page=100&access_token=%s", GITHUB, c.svc.APIKey))
+	resp, err := http.Get(fmt.Sprintf("%s/user/repos?sort=pushed&per_page=100&access_token=%s", githubAPI, c.svc.APIKey))
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +70,7 @@ func (c *crawler) listCommitsByRepo(wg *sync.WaitGroup, r *argus.Repo) {
 	for {
 		page++
 		req := fmt.Sprintf("%s/repos/%s/commits?since=%s&author=%s&per_page=100&access_token=%s&page=%d",
-			GITHUB, r.FullName, lastYear.Format("2006-01-02T03:04:05Z"), c.svc.User, c.svc.APIKey, page)
+			githubAPI, r.FullName, lastYear.Format("2006-01-02T03:04:05Z"), c.svc.User, c.svc.APIKey, page)
 		resp, err := http.Get(req)
 		if err != nil {
 			log.Errorf("failed to fetch commits for %s: %s", req, err)

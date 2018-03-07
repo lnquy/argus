@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	GITLAB     = "https://gitlab.com/api/v3"
+	gitlabAPI  = "https://gitlab.com/api/v3"
 	actPushed  = "pushed"
 	actCreated = "created"
 	actMerged  = "merged"
@@ -27,7 +27,7 @@ type crawler struct {
 
 func NewCrawler(svc *argus.SVC) argus.Crawler {
 	c := &crawler{
-		svc: svc,
+		svc:      svc,
 		reposMap: make(map[int]*argus.Repo),
 		reposMux: sync.RWMutex{},
 	}
@@ -116,7 +116,7 @@ func (c *crawler) listEvents() ([]Event, error) {
 			for p := range pageChan {
 				log.Debugf("fetch event page #%d", p)
 				req := fmt.Sprintf("%s/events?per_page=100&page=%d&after=%s&private_token=%s",
-					GITLAB, p, lastYear.Format("2006-01-02"), c.svc.APIKey)
+					gitlabAPI, p, lastYear.Format("2006-01-02"), c.svc.APIKey)
 				resp, err := http.Get(req)
 				if err != nil {
 					log.Errorf("failed to fetch event page #%d: %s", p, err)
@@ -180,7 +180,7 @@ func (c *crawler) getRepo(pidChan chan int, wg *sync.WaitGroup) {
 		go func() {
 			for pid := range pidChan {
 				log.Debugf("fetch repo detail: %d", pid)
-				resp, err := http.Get(fmt.Sprintf("%s/projects/%d?private_token=%s", GITLAB, pid, c.svc.APIKey))
+				resp, err := http.Get(fmt.Sprintf("%s/projects/%d?private_token=%s", gitlabAPI, pid, c.svc.APIKey))
 				if err != nil {
 					continue
 				}

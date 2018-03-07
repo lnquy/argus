@@ -15,15 +15,9 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-type Report struct {
-	Date    time.Time `json:"date"`
-	Commits int       `json:"commits"`
-}
-
 var (
-	contribs map[string]int
-	log      *logrus.Entry
-
+	log *logrus.Entry
+	// Flags
 	fDebug = flag.Bool("d", false, "enabled debug log")
 	fOut   = flag.String("o", "", "path to write output file")
 )
@@ -38,12 +32,12 @@ func main() {
 	c := make([]argus.Crawler, 0)
 	c = append(c, github.NewCrawler(&argus.SVC{
 		User:   "lnquy",
-		Emails: []string{"lnquy.it@gmail.com"},
+		Emails:  []string{"lnquy.it@gmail.com"},
 		APIKey: "",
 	}))
 	c = append(c, gitlab.NewCrawler(&argus.SVC{
 		User:   "lnquy",
-		Emails: []string{"lnquy.it@gmail.com"},
+		Emails:  []string{"lnquy.it@gmail.com"},
 		APIKey: "",
 	}))
 
@@ -83,7 +77,7 @@ func main() {
 		w.WriteString(fmt.Sprintf("%s (%s) - %d\n", r.Name, r.URL, len(r.Commits)))
 	}
 
-	contribs = make(map[string]int)
+	contribs := make(map[string]int)
 	for _, r := range repos {
 		for _, c := range r.Commits {
 			d := c.Date.Format("2006-01-02")
