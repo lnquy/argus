@@ -3,12 +3,12 @@ package github
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	argus "github.com/lnquy/argus/lib"
+	"github.com/sirupsen/logrus"
 )
 
 const GITHUB = "https://api.github.com"
@@ -18,20 +18,27 @@ type crawler struct {
 }
 
 func NewCrawler(svc *argus.SVC) argus.Crawler {
-	return &crawler{
+	c := &crawler{
 		svc: svc,
 	}
+	c.getLogger().Info("crawler created")
+	return c
 }
 
 func (c *crawler) GetContributions() ([]argus.Repo, error) {
+	log := c.getLogger()
+	log.Info("start fetching contributions")
 	repos, err := c.listRepos()
 	if err != nil {
 		return nil, err
 	}
+	log.Info("done fetching contributions")
 	return repos, nil
 }
 
 func (c *crawler) listRepos() ([]argus.Repo, error) {
+	log := c.getLogger()
+	log.Debug("fetch all repos")
 	repos := make([]argus.Repo, 0)
 
 	resp, err := http.Get(fmt.Sprintf("%s/user/repos?sort=pushed&per_page=100&access_token=%s", GITHUB, c.svc.APIKey))
@@ -49,12 +56,14 @@ func (c *crawler) listRepos() ([]argus.Repo, error) {
 		go c.listCommitsByRepo(&wg, &repos[i])
 	}
 	wg.Wait()
+	log.Debug("all repos fetched")
 	return repos, nil
 }
 
 func (c *crawler) listCommitsByRepo(wg *sync.WaitGroup, r *argus.Repo) {
 	defer wg.Done()
-	log.Printf("github: crawling %s\n", r.URL)
+	log := c.getLogger()
+	log.Debugf("fetch commits for repo %s", r.URL)
 	lastYear := time.Now().AddDate(-1, 0, 0)
 
 	page := 0
@@ -64,13 +73,13 @@ func (c *crawler) listCommitsByRepo(wg *sync.WaitGroup, r *argus.Repo) {
 			GITHUB, r.FullName, lastYear.Format("2006-01-02T03:04:05Z"), c.svc.User, c.svc.APIKey, page)
 		resp, err := http.Get(req)
 		if err != nil {
-			log.Printf("github: failed to fetch commits for %s: %s\n", req, err)
+			log.Errorf("failed to fetch commits for %s: %s", req, err)
 			return
 		}
 		commits := make([]commit, 0)
 		if err = json.NewDecoder(resp.Body).Decode(&commits); err != nil {
 			resp.Body.Close()
-			log.Printf("github: failed to decode commits for %s: %s\n", req, err)
+			log.Errorf("failed to decode commits for %s: %s", req, err)
 			return
 		}
 		resp.Body.Close()
@@ -82,19 +91,19 @@ func (c *crawler) listCommitsByRepo(wg *sync.WaitGroup, r *argus.Repo) {
 		}
 	}
 
-	log.Printf("github: done %s\n", r.URL)
+	log.Debugf("commits fetched for %s", r.URL)
 }
 
 func toExportCommit(cs []commit) []argus.Commit {
 	ret := make([]argus.Commit, 0)
 	for _, c := range cs {
 		ret = append(ret, argus.Commit{
-			Sha: c.Sha,
+			Sha:  c.Sha,
 			Date: c.Commit.Author.Date,
 			Author: argus.Author{
 				Login: c.Author.Login,
-				ID: c.Author.ID,
-				Name: c.Commit.Author.Name,
+				ID:    c.Author.ID,
+				Name:  c.Commit.Author.Name,
 				Email: c.Commit.Author.Email,
 			},
 		})
@@ -102,6 +111,12 @@ func toExportCommit(cs []commit) []argus.Commit {
 	return ret
 }
 
+func (c *crawler) getLogger() *logrus.Entry {
+	return logrus.WithFields(logrus.Fields{
+		"type": "github",
+		"user": c.svc.User,
+	})
+}
 
 // Generated struct from Github JSON
 type (
@@ -207,7 +222,6 @@ type (
 		} `json:"permissions"`
 	}
 
-
 	commit struct {
 		Sha string `json:"sha"`
 		Commit struct {
@@ -283,4 +297,3 @@ type (
 		} `json:"parents"`
 	}
 )
-

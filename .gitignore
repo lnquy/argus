@@ -17,3 +17,4 @@
 .vscode/
 
 cmd/argus/*.log
+vendor/
